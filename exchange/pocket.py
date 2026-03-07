@@ -13,7 +13,7 @@ def auth():
         DB_PASSWORD = settings.DB_PASSWORD
         pb.admins.auth_with_password(DB_ID, DB_PASSWORD)
     except Exception as e:
-        raise Exception("DB auth error")
+        pass  # DB auth error ignored
 
 
 def reauth():

@@ -58,8 +58,6 @@ from devtools import debug
 
 
 from exchange.dashboard import router as dashboard_router
-from exchange.recovery_engine import recovery_engine
-from exchange.order_manager import OrderManager
 
 
 
@@ -102,7 +100,6 @@ def get_error(e):
 async def startup():
 
     log_message(f"POABOT 실행 완료! - 버전:{VERSION}")
-    recovery_engine.start()
 
 
 
@@ -322,13 +319,11 @@ async def order(order_info: MarketOrder, background_tasks: BackgroundTasks):
 
             if bot.order_info.is_entry:
 
-                order_manager = OrderManager(bot, max_retries=3, retry_delay=2)
-                order_result = order_manager.execute_with_retry(bot.market_entry, bot.order_info, "entry")
+                order_result = bot.market_entry(bot.order_info)
 
             elif bot.order_info.is_close:
 
-                order_manager = OrderManager(bot, max_retries=3, retry_delay=2)
-                order_result = order_manager.execute_with_retry(bot.market_close, bot.order_info, "close")
+                order_result = bot.market_close(bot.order_info)
 
             elif bot.order_info.is_buy:
 
