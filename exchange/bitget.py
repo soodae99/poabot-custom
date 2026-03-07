@@ -63,12 +63,12 @@ class Bitget:
                     elif position["side"] == "short":
                         short_contracts = float(position["info"]["available"])
 
-                if self.order_info.is_close and self.order_info.is_buy:
+                if order_info.is_close and self.order_info.is_buy:
                     if not short_contracts:
                         raise error.ShortPositionNoneError()
                     else:
                         return short_contracts
-                elif self.order_info.is_close and self.order_info.is_sell:
+                elif order_info.is_close and self.order_info.is_sell:
                     if not long_contracts:
                         raise error.LongPositionNoneError()
                     else:
@@ -84,7 +84,7 @@ class Bitget:
 
     def get_balance(self, base: str):
         free_balance_by_base = None
-        if self.order_info.is_entry or (
+        if self.order_info.is_entry or self.order_info.is_futures or (
             self.order_info.is_spot
             and (self.order_info.is_buy or self.order_info.is_sell)
         ):
@@ -105,12 +105,12 @@ class Bitget:
             result = order_info.amount
 
         elif order_info.percent is not None:
-            if order_info.is_entry or (order_info.is_spot and order_info.is_buy):
-                free_quote = self.get_balance(order_info.quote)
+            if order_info.is_entry or order_info.is_buy:
+                free_quote = self.get_balance(order_info.quote.replace('.P', ''))
                 cash = free_quote * (order_info.percent - 1) / 100
                 current_price = self.get_price(order_info.unified_symbol)
                 result = cash / current_price
-            elif self.order_info.is_close:
+            elif order_info.is_close:
                 free_amount = self.get_futures_position(order_info.unified_symbol)
                 result = free_amount * order_info.percent / 100
             elif order_info.is_spot and order_info.is_sell:

@@ -58,6 +58,7 @@ from devtools import debug
 
 
 from exchange.dashboard import router as dashboard_router
+from exchange.report import router as report_router
 from exchange.recovery_engine import recovery_engine
 from exchange.order_manager import OrderManager
 
@@ -70,6 +71,7 @@ app = FastAPI(default_response_class=ORJSONResponse)
 
 
 app.include_router(dashboard_router)
+app.include_router(report_router)
 
 
 

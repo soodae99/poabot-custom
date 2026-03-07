@@ -381,7 +381,45 @@ async def dashboard_home(request: Request):
 
             pnl_color = "#40c057" if (t['pnl'] or 0) >= 0 else "#fa5252"
 
-            trade_rows += f"<tr><td>{t['strategy']}</td><td>{t['symbol']}</td><td>{t['side']}</td><td style='color:{pnl_color}'>{t['pnl'] or 0:.2f}</td><td style='color:{pnl_color}'>{t['pnl_percent'] or 0:.2f}%</td><td>{t['created_at'][:16]}</td></tr>"
+            try:
+
+                entry_p = t['entry_price'] if 'entry_price' in t.keys() and t['entry_price'] else '-'
+
+            except:
+
+                entry_p = '-'
+
+            try:
+
+                exit_p = t['price'] if t['price'] else '-'
+
+            except:
+
+                exit_p = '-'
+
+            try:
+
+                fee = t['fee'] if 'fee' in t.keys() and t['fee'] else 0
+
+            except:
+
+                fee = 0
+
+            try:
+
+                holding = t['holding_seconds'] if 'holding_seconds' in t.keys() and t['holding_seconds'] else 0
+
+            except:
+
+                holding = 0
+
+            h_hours = holding // 3600
+
+            h_mins = (holding % 3600) // 60
+
+            h_str = f"{h_hours}h {h_mins}m" if h_hours > 0 else f"{h_mins}m"
+
+            trade_rows += f"<tr><td>{t['strategy']}</td><td>{t['symbol']}</td><td>{t['side']}</td><td>{entry_p}</td><td>{exit_p}</td><td style='color:{pnl_color}'>{t['pnl'] or 0:.2f}</td><td style='color:{pnl_color}'>{t['pnl_percent'] or 0:.2f}%</td><td>{fee:.4f}</td><td>{h_str}</td><td>{t['created_at'][:16]}</td></tr>"
 
     else:
 
@@ -525,7 +563,7 @@ async def dashboard_home(request: Request):
 
     <div class="header">
 
-        <h1>📊 POA Dashboard</h1>
+        <h1>📊 POA Dashboard</h1></div><div class="nav"><a href="/dashboard/report" style="color:#4dabf7;text-decoration:none;margin-right:20px;">📈 리포트</a>
 
         <div><span style="color:#888; margin-right:20px">{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</span><a href="/dashboard/logout" class="logout">로그아웃</a></div>
 
@@ -565,7 +603,7 @@ async def dashboard_home(request: Request):
 
     <div class="section"><h2 class="section-title">📋 최근 거래</h2>
 
-        <table><thead><tr><th>전략</th><th>심볼</th><th>방향</th><th>손익</th><th>수익률</th><th>시간</th></tr></thead><tbody>{trade_rows}</tbody></table>
+        <table><thead><tr><th>전략</th><th>심볼</th><th>방향</th><th>진입가</th><th>종료가</th><th>손익</th><th>수익률</th><th>수수료</th><th>보유</th><th>시간</th></tr></thead><tbody>{trade_rows}</tbody></table>
 
     </div>
 
@@ -689,4 +727,417 @@ async def trigger_recovery_check(request: Request):
     recovery_engine.check_and_recover()
 
     return {"result": "checked", "issues": recovery_engine.issues_found}
+
+
+
+
+@router.get("/report", response_class=HTMLResponse)
+
+async def report_page(request: Request):
+
+    if not check_auth(request):
+
+        return HTMLResponse(content=get_login_page())
+
+    
+
+    from datetime import datetime, timedelta
+
+    
+
+    # 기간 계산
+
+    today = datetime.now().strftime('%Y-%m-%d')
+
+    week_ago = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
+
+    month_ago = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+
+    
+
+    # 기간별 통계
+
+    today_stats = db.get_stats_by_period(today + ' 00:00:00', today + ' 23:59:59')
+
+    week_stats = db.get_stats_by_period(week_ago + ' 00:00:00', today + ' 23:59:59')
+
+    month_stats = db.get_stats_by_period(month_ago + ' 00:00:00', today + ' 23:59:59')
+
+    all_stats = db.get_strategy_stats()
+
+    
+
+    # 종목별 통계
+
+    symbol_stats = db.get_stats_by_symbol()
+
+    
+
+    # 일별 손익
+
+    daily_pnl = db.get_daily_pnl(30)
+
+    
+
+    def format_stats(s):
+
+        if not s:
+
+            return {'trades': 0, 'wins': 0, 'losses': 0, 'pnl': 0, 'win_rate': 0, 'avg_pnl': 0}
+
+        trades = s['total_trades'] or 0
+
+        wins = s['wins'] or 0
+
+        return {
+
+            'trades': trades,
+
+            'wins': wins,
+
+            'losses': s['losses'] or 0,
+
+            'pnl': s['total_pnl'] or 0,
+
+            'win_rate': round(wins / trades * 100, 1) if trades > 0 else 0,
+
+            'avg_pnl': s['avg_pnl_percent'] or 0
+
+        }
+
+    
+
+    today_s = format_stats(today_stats)
+
+    week_s = format_stats(week_stats)
+
+    month_s = format_stats(month_stats)
+
+    
+
+    # 전체 통계
+
+    total_pnl = sum(s['total_pnl'] or 0 for s in all_stats) if all_stats else 0
+
+    total_trades = sum(s['total_trades'] or 0 for s in all_stats) if all_stats else 0
+
+    total_wins = sum(s['wins'] or 0 for s in all_stats) if all_stats else 0
+
+    all_s = {
+
+        'trades': total_trades,
+
+        'wins': total_wins,
+
+        'losses': total_trades - total_wins,
+
+        'pnl': round(total_pnl, 2),
+
+        'win_rate': round(total_wins / total_trades * 100, 1) if total_trades > 0 else 0,
+
+        'avg_pnl': 0
+
+    }
+
+    
+
+    # 종목별 테이블
+
+    symbol_rows = ""
+
+    if symbol_stats:
+
+        for s in symbol_stats:
+
+            wr = round(s['wins'] / s['total_trades'] * 100, 1) if s['total_trades'] > 0 else 0
+
+            pnl_color = "#40c057" if (s['total_pnl'] or 0) >= 0 else "#fa5252"
+
+            symbol_rows += f"<tr><td>{s['symbol']}</td><td>{s['total_trades']}</td><td>{wr}%</td><td style='color:{pnl_color}'>{s['total_pnl'] or 0:.2f}</td><td>{s['avg_pnl_percent'] or 0:.2f}%</td></tr>"
+
+    else:
+
+        symbol_rows = '<tr><td colspan="5" style="text-align:center">거래 내역 없음</td></tr>'
+
+    
+
+    # 일별 차트 데이터
+
+    chart_labels = [d['date'] for d in daily_pnl] if daily_pnl else []
+
+    chart_data = [d['daily_pnl'] for d in daily_pnl] if daily_pnl else []
+
+    
+
+    # 누적 계산
+
+    cumulative = []
+
+    total = 0
+
+    for d in chart_data:
+
+        total += d
+
+        cumulative.append(round(total, 2))
+
+    
+
+    html = f"""<!DOCTYPE html>
+
+<html>
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>POA Report</title>
+
+    <style>
+
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+
+        body {{ font-family: -apple-system, sans-serif; background: #0f0f0f; color: #e0e0e0; padding: 20px; }}
+
+        .header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; padding-bottom: 20px; border-bottom: 1px solid #333; }}
+
+        h1 {{ color: #fff; font-size: 24px; }}
+
+        .nav {{ display: flex; gap: 15px; }}
+
+        .nav a {{ color: #4dabf7; text-decoration: none; }}
+
+        .nav a:hover {{ color: #fff; }}
+
+        .section {{ margin-bottom: 30px; }}
+
+        .section-title {{ font-size: 18px; margin-bottom: 15px; color: #fff; }}
+
+        .period-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 30px; }}
+
+        .period-card {{ background: #1a1a1a; padding: 20px; border-radius: 10px; }}
+
+        .period-card h3 {{ color: #4dabf7; margin-bottom: 15px; font-size: 14px; }}
+
+        .period-card .pnl {{ font-size: 28px; font-weight: bold; margin-bottom: 10px; }}
+
+        .period-card .details {{ color: #888; font-size: 12px; }}
+
+        .period-card .details span {{ display: block; margin: 5px 0; }}
+
+        table {{ width: 100%; border-collapse: collapse; background: #1a1a1a; border-radius: 10px; overflow: hidden; }}
+
+        th, td {{ padding: 12px 15px; text-align: left; border-bottom: 1px solid #333; }}
+
+        th {{ background: #252525; color: #888; }}
+
+        .card {{ background: #1a1a1a; padding: 20px; border-radius: 10px; }}
+
+    </style>
+
+</head>
+
+<body>
+
+    <div class="header">
+
+        <h1>📊 성과 리포트</h1>
+
+        <div class="nav">
+
+            <a href="/dashboard/">← 대시보드</a>
+
+            <span style="color:#888">{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</span>
+
+        </div>
+
+    </div>
+
+    
+
+    <div class="section">
+
+        <h2 class="section-title">📅 기간별 성과</h2>
+
+        <div class="period-grid">
+
+            <div class="period-card">
+
+                <h3>오늘</h3>
+
+                <div class="pnl" style="color:{'#40c057' if today_s['pnl'] >= 0 else '#fa5252'}">{today_s['pnl']:.2f} USDT</div>
+
+                <div class="details">
+
+                    <span>거래: {today_s['trades']}회</span>
+
+                    <span>승률: {today_s['win_rate']}% ({today_s['wins']}W / {today_s['losses']}L)</span>
+
+                </div>
+
+            </div>
+
+            <div class="period-card">
+
+                <h3>이번 주 (7일)</h3>
+
+                <div class="pnl" style="color:{'#40c057' if week_s['pnl'] >= 0 else '#fa5252'}">{week_s['pnl']:.2f} USDT</div>
+
+                <div class="details">
+
+                    <span>거래: {week_s['trades']}회</span>
+
+                    <span>승률: {week_s['win_rate']}% ({week_s['wins']}W / {week_s['losses']}L)</span>
+
+                </div>
+
+            </div>
+
+            <div class="period-card">
+
+                <h3>이번 달 (30일)</h3>
+
+                <div class="pnl" style="color:{'#40c057' if month_s['pnl'] >= 0 else '#fa5252'}">{month_s['pnl']:.2f} USDT</div>
+
+                <div class="details">
+
+                    <span>거래: {month_s['trades']}회</span>
+
+                    <span>승률: {month_s['win_rate']}% ({month_s['wins']}W / {month_s['losses']}L)</span>
+
+                </div>
+
+            </div>
+
+            <div class="period-card">
+
+                <h3>전체</h3>
+
+                <div class="pnl" style="color:{'#40c057' if all_s['pnl'] >= 0 else '#fa5252'}">{all_s['pnl']:.2f} USDT</div>
+
+                <div class="details">
+
+                    <span>거래: {all_s['trades']}회</span>
+
+                    <span>승률: {all_s['win_rate']}% ({all_s['wins']}W / {all_s['losses']}L)</span>
+
+                </div>
+
+            </div>
+
+        </div>
+
+    </div>
+
+    
+
+    <div class="section">
+
+        <h2 class="section-title">📈 일별 손익 추이 (30일)</h2>
+
+        <div class="card" style="padding: 20px;">
+
+            <canvas id="dailyChart" height="100"></canvas>
+
+        </div>
+
+    </div>
+
+    
+
+    <div class="section">
+
+        <h2 class="section-title">💰 종목별 성과</h2>
+
+        <table>
+
+            <thead>
+
+                <tr><th>종목</th><th>거래 수</th><th>승률</th><th>총 손익</th><th>평균 수익률</th></tr>
+
+            </thead>
+
+            <tbody>{symbol_rows}</tbody>
+
+        </table>
+
+    </div>
+
+    
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <script>
+
+        const ctx = document.getElementById('dailyChart').getContext('2d');
+
+        new Chart(ctx, {{
+
+            type: 'bar',
+
+            data: {{
+
+                labels: {chart_labels},
+
+                datasets: [
+
+                    {{
+
+                        label: '일별 손익',
+
+                        data: {chart_data},
+
+                        backgroundColor: {chart_data}.map(v => v >= 0 ? 'rgba(64, 192, 87, 0.8)' : 'rgba(250, 82, 82, 0.8)'),
+
+                        yAxisID: 'y'
+
+                    }},
+
+                    {{
+
+                        label: '누적 손익',
+
+                        data: {cumulative},
+
+                        type: 'line',
+
+                        borderColor: '#4dabf7',
+
+                        backgroundColor: 'transparent',
+
+                        yAxisID: 'y1'
+
+                    }}
+
+                ]
+
+            }},
+
+            options: {{
+
+                responsive: true,
+
+                scales: {{
+
+                    x: {{ grid: {{ color: '#333' }}, ticks: {{ color: '#888' }} }},
+
+                    y: {{ position: 'left', grid: {{ color: '#333' }}, ticks: {{ color: '#888' }} }},
+
+                    y1: {{ position: 'right', grid: {{ display: false }}, ticks: {{ color: '#4dabf7' }} }}
+
+                }}
+
+            }}
+
+        }});
+
+    </script>
+
+</body>
+
+</html>"""
+
+    return HTMLResponse(content=html)
 

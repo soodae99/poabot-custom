@@ -1,11 +1,9 @@
 
-import asyncio
-
 import threading
 
 import time
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from exchange.database import db
 
@@ -17,15 +15,7 @@ from exchange.utility import log_message, log_error_message
 
 class RecoveryEngine:
 
-    def __init__(self, check_interval=60, auto_recover=False):
-
-        """
-
-        check_interval: 체크 주기 (초)
-
-        auto_recover: True면 자동 복구, False면 알림만
-
-        """
+    def __init__(self, check_interval=60, auto_recover=True):
 
         self.check_interval = check_interval
 
@@ -39,17 +29,33 @@ class RecoveryEngine:
 
         self.issues_found = []
 
+        self.synced_trades = self._load_synced_trades()
+
+    
+
+    def _load_synced_trades(self):
+
+        try:
+
+            existing = db.fetch_all("SELECT exit_time FROM trades WHERE strategy='비트겟직접' ORDER BY created_at DESC LIMIT 100", {})
+
+            if existing:
+
+                return set(e['exit_time'] for e in existing if e['exit_time'])
+
+        except:
+
+            pass
+
+        return set()
+
     
 
     def start(self):
 
-        """백그라운드에서 리커버리 엔진 시작"""
-
         if self.running:
 
             return
-
-        
 
         self.running = True
 
@@ -63,21 +69,15 @@ class RecoveryEngine:
 
     def stop(self):
 
-        """리커버리 엔진 중지"""
-
         self.running = False
 
         if self.thread:
 
             self.thread.join(timeout=5)
 
-        log_message("[리커버리 엔진] 중지됨")
-
     
 
     def _run_loop(self):
-
-        """주기적 체크 루프"""
 
         while self.running:
 
@@ -85,19 +85,17 @@ class RecoveryEngine:
 
                 self.check_and_recover()
 
+                self.sync_recent_trades()
+
             except Exception as e:
 
                 log_error_message(f"리커버리 엔진 에러: {str(e)[:100]}", "Recovery Engine")
-
-            
 
             time.sleep(self.check_interval)
 
     
 
     def check_and_recover(self):
-
-        """포지션 불일치 체크 및 복구"""
 
         self.last_check = datetime.now()
 
@@ -107,19 +105,9 @@ class RecoveryEngine:
 
         try:
 
-            # 1. 거래소 실제 포지션 가져오기
-
             exchange_positions = self._get_exchange_positions()
 
-            
-
-            # 2. DB 예상 포지션 가져오기
-
             db_positions = db.get_active_positions()
-
-            
-
-            # 3. 비교
 
             issues = self._compare_positions(exchange_positions, db_positions)
 
@@ -131,8 +119,6 @@ class RecoveryEngine:
 
                 self._handle_issues(issues)
 
-            
-
         except Exception as e:
 
             log_error_message(f"포지션 체크 실패: {str(e)[:100]}", "Recovery Engine")
@@ -141,15 +127,11 @@ class RecoveryEngine:
 
     def _get_exchange_positions(self):
 
-        """거래소에서 실제 포지션 가져오기"""
-
         try:
 
             bot = get_bot("BITGET")
 
             positions = bot.client.fetch_positions()
-
-            
 
             active = {}
 
@@ -177,21 +159,13 @@ class RecoveryEngine:
 
         except Exception as e:
 
-            log_error_message(f"거래소 포지션 조회 실패: {str(e)[:50]}", "Recovery Engine")
-
             return {}
 
     
 
     def _compare_positions(self, exchange_pos, db_pos):
 
-        """포지션 비교하여 불일치 찾기"""
-
         issues = []
-
-        
-
-        # DB 포지션을 symbol 기준으로 정리
 
         db_by_symbol = {}
 
@@ -199,11 +173,9 @@ class RecoveryEngine:
 
             for p in db_pos:
 
-                db_by_symbol[p['symbol']] = p
+                db_by_symbol[p['symbol']] = dict(p)
 
         
-
-        # Case 1: 거래소에 있는데 DB에 없음 (진입 누락 or 수동 거래)
 
         for symbol, ex_pos in exchange_pos.items():
 
@@ -219,13 +191,13 @@ class RecoveryEngine:
 
                     'exchange_amount': ex_pos['amount'],
 
-                    'message': f"거래소에 {symbol} 포지션 있으나 DB에 없음 (수동거래 또는 진입 기록 누락)"
+                    'entry_price': ex_pos['entry_price'],
+
+                    'message': f"거래소에 {symbol} 포지션 있으나 DB에 없음"
 
                 })
 
         
-
-        # Case 2: DB에 있는데 거래소에 없음 (종료 누락 or 청산됨)
 
         for symbol, db_p in db_by_symbol.items():
 
@@ -237,43 +209,11 @@ class RecoveryEngine:
 
                     'symbol': symbol,
 
-                    'db_side': db_p['side'],
+                    'db_data': db_p,
 
-                    'db_amount': db_p['amount'],
-
-                    'db_strategy': db_p['strategy'],
-
-                    'message': f"DB에 {symbol} 포지션 있으나 거래소에 없음 (종료 누락 또는 청산됨)"
+                    'message': f"DB에 {symbol} 포지션 있으나 거래소에 없음"
 
                 })
-
-        
-
-        # Case 3: 둘 다 있지만 방향이 다름
-
-        for symbol in db_by_symbol:
-
-            if symbol in exchange_pos:
-
-                db_side = db_by_symbol[symbol]['side']
-
-                ex_side = exchange_pos[symbol]['side']
-
-                if db_side != ex_side:
-
-                    issues.append({
-
-                        'type': 'side_mismatch',
-
-                        'symbol': symbol,
-
-                        'db_side': db_side,
-
-                        'exchange_side': ex_side,
-
-                        'message': f"{symbol} 방향 불일치: DB={db_side}, 거래소={ex_side}"
-
-                    })
 
         
 
@@ -283,13 +223,15 @@ class RecoveryEngine:
 
     def _handle_issues(self, issues):
 
-        """불일치 처리"""
-
         for issue in issues:
 
-            if self.auto_recover:
+            if issue['type'] == 'missing_in_exchange' and self.auto_recover:
 
-                self._auto_recover(issue)
+                self._auto_close_position(issue)
+
+            elif issue['type'] == 'missing_in_db' and self.auto_recover:
+
+                self._auto_add_position(issue)
 
             else:
 
@@ -297,99 +239,463 @@ class RecoveryEngine:
 
     
 
-    def _auto_recover(self, issue):
+    def _auto_add_position(self, issue):
 
-        """자동 복구 시도"""
+        try:
+
+            symbol = issue['symbol']
+
+            side = issue.get('exchange_side', 'buy')
+
+            amount = issue.get('exchange_amount', 0)
+
+            entry_price = issue.get('entry_price', 0)
+
+            
+
+            db.excute("""
+
+                INSERT INTO positions (strategy, exchange, symbol, side, amount, entry_price, leverage, created_at)
+
+                VALUES (:strategy, :exchange, :symbol, :side, :amount, :entry_price, :leverage, :created_at)
+
+            """, {
+
+                'strategy': '수동거래',
+
+                'exchange': 'BITGET',
+
+                'symbol': symbol,
+
+                'side': side,
+
+                'amount': amount,
+
+                'entry_price': entry_price,
+
+                'leverage': 1,
+
+                'created_at': datetime.now().isoformat()
+
+            })
+
+            
+
+            log_message(f"✅ [자동 추가] {symbol} 포지션 DB에 등록")
+
+            
+
+        except Exception as e:
+
+            log_error_message(f"자동 추가 실패: {str(e)}", "Recovery Engine")
+
+    
+
+    def _auto_close_position(self, issue):
+
+        try:
+
+            db_data = issue.get('db_data', {})
+
+            symbol = issue['symbol']
+
+            strategy = db_data.get('strategy', 'unknown')
+
+            entry_price = db_data.get('entry_price', 0)
+
+            entry_time = db_data.get('created_at', '')
+
+            side = db_data.get('side', 'buy')
+
+            amount = db_data.get('amount', 0)
+
+            leverage = db_data.get('leverage', 1) or 1
+
+            
+
+            bot = get_bot("BITGET")
+
+            trades = bot.client.fetch_my_trades(symbol, limit=20)
+
+            
+
+            exit_price = None
+
+            exit_time = None
+
+            total_fee = 0
+
+            
+
+            for trade in reversed(trades):
+
+                trade_side = trade.get('side', '')
+
+                if (side == 'buy' and trade_side == 'sell') or (side == 'sell' and trade_side == 'buy'):
+
+                    exit_price = float(trade.get('price', 0))
+
+                    exit_time = trade.get('datetime', datetime.now().isoformat())
+
+                    fee_info = trade.get('fee', {})
+
+                    if fee_info:
+
+                        total_fee = float(fee_info.get('cost', 0))
+
+                    break
+
+            
+
+            if not exit_price:
+
+                ticker = bot.client.fetch_ticker(symbol)
+
+                exit_price = float(ticker.get('last', 0))
+
+            
+
+            if not exit_time:
+
+                exit_time = datetime.now().isoformat()
+
+            
+
+            holding_seconds = 0
+
+            try:
+
+                if entry_time:
+
+                    entry_dt = datetime.fromisoformat(entry_time.split('+')[0].split('Z')[0])
+
+                    exit_dt = datetime.fromisoformat(exit_time.split('+')[0].split('Z')[0])
+
+                    holding_seconds = int((exit_dt - entry_dt).total_seconds())
+
+            except:
+
+                pass
+
+            
+
+            if side == 'buy':
+
+                pnl = (exit_price - entry_price) * amount
+
+                pnl_percent = ((exit_price - entry_price) / entry_price) * 100 * leverage if entry_price > 0 else 0
+
+            else:
+
+                pnl = (entry_price - exit_price) * amount
+
+                pnl_percent = ((entry_price - exit_price) / entry_price) * 100 * leverage if entry_price > 0 else 0
+
+            
+
+            is_win = 1 if pnl > 0 else 0
+
+            
+
+            db.save_trade({
+
+                'strategy': strategy,
+
+                'exchange': 'BITGET',
+
+                'symbol': symbol,
+
+                'side': 'close_' + side,
+
+                'amount': amount,
+
+                'price': exit_price,
+
+                'entry_price': entry_price,
+
+                'exit_price': exit_price,
+
+                'entry_time': entry_time,
+
+                'exit_time': exit_time,
+
+                'leverage': leverage,
+
+                'pnl': round(pnl, 4),
+
+                'pnl_percent': round(pnl_percent, 2),
+
+                'is_win': is_win,
+
+                'fee': round(total_fee, 6),
+
+                'holding_seconds': holding_seconds
+
+            })
+
+            
+
+            db.excute("DELETE FROM positions WHERE symbol = :symbol AND strategy = :strategy", 
+
+                     {"symbol": symbol, "strategy": strategy})
+
+            
+
+            hours = holding_seconds // 3600
+
+            minutes = (holding_seconds % 3600) // 60
+
+            holding_str = f"{hours}시간 {minutes}분" if hours > 0 else f"{minutes}분"
+
+            
+
+            pnl_emoji = "🟢" if pnl >= 0 else "🔴"
+
+            log_message(f"{pnl_emoji} [{strategy}] {symbol} 종료 - 손익: {pnl:.4f} USDT ({pnl_percent:.2f}%) | 보유: {holding_str}")
+
+            
+
+        except Exception as e:
+
+            log_error_message(f"자동 정리 실패: {str(e)}", "Recovery Engine")
+
+    
+
+    def sync_recent_trades(self):
 
         try:
 
             bot = get_bot("BITGET")
 
+            symbols = ['XRP/USDT:USDT', 'BTC/USDT:USDT', 'ETH/USDT:USDT']
+
             
 
-            if issue['type'] == 'missing_in_exchange':
+            for symbol in symbols:
 
-                # DB에만 있고 거래소에 없음 → DB에서 포지션 삭제
+                try:
 
-                log_message(f"[자동복구] {issue['symbol']} DB 포지션 정리 (거래소에 없음)")
+                    trades = bot.client.fetch_my_trades(symbol, limit=20)
 
-                # DB에서 해당 포지션 삭제
+                    self._process_trades(trades, symbol)
 
-                db.excute(
+                except:
 
-                    "DELETE FROM positions WHERE symbol = :symbol",
+                    pass
 
-                    {'symbol': issue['symbol']}
+        except:
 
-                )
-
-                self._send_alert(issue, recovered=True)
-
-                
-
-            elif issue['type'] == 'missing_in_db':
-
-                # 거래소에만 있고 DB에 없음 → 알림만 (수동 거래일 수 있음)
-
-                log_message(f"[알림] {issue['symbol']} 거래소 포지션 발견 (DB에 없음 - 수동거래?)")
-
-                self._send_alert(issue)
-
-                
-
-            elif issue['type'] == 'side_mismatch':
-
-                # 방향 불일치 → 위험하므로 알림만
-
-                log_message(f"[경고] {issue['symbol']} 방향 불일치 - 수동 확인 필요")
-
-                self._send_alert(issue)
-
-                
-
-        except Exception as e:
-
-            log_error_message(f"자동복구 실패: {str(e)[:100]}", "Recovery Engine")
-
-            self._send_alert(issue, error=str(e))
+            pass
 
     
 
-    def _send_alert(self, issue, recovered=False, error=None):
+    def _process_trades(self, trades, symbol):
 
-        """디스코드 알림 전송"""
+        if not trades:
 
-        status = "✅ 복구됨" if recovered else "⚠️ 확인 필요"
-
-        if error:
-
-            status = f"❌ 복구 실패: {error[:50]}"
+            return
 
         
 
-        msg = f"""🔔 [리커버리 엔진] 포지션 불일치 감지
+        now = datetime.now()
 
-
-
-{status}
-
-유형: {issue['type']}
-
-심볼: {issue['symbol']}
-
-상세: {issue['message']}
-
-시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
+        cutoff = now - timedelta(minutes=5)
 
         
 
-        log_message(msg)
+        entries = []
+
+        exits = []
+
+        
+
+        for t in trades:
+
+            trade_id = t.get('id', '')
+
+            if trade_id in self.synced_trades:
+
+                continue
+
+            
+
+            trade_time_str = t.get('datetime', '')
+
+            try:
+
+                trade_time = datetime.fromisoformat(trade_time_str.replace('Z', '+00:00').split('+')[0])
+
+                if trade_time < cutoff:
+
+                    continue
+
+            except:
+
+                continue
+
+            
+
+            side = t.get('side', '')
+
+            info = t.get('info', {})
+
+            trade_side = info.get('tradeSide', '')
+
+            
+
+            trade_data = {
+
+                'id': trade_id,
+
+                'time': trade_time_str,
+
+                'price': float(t.get('price', 0)),
+
+                'amount': float(t.get('amount', 0)),
+
+                'fee': float(t.get('fee', {}).get('cost', 0)) if t.get('fee') else 0,
+
+                'side': side,
+
+                'trade_side': trade_side
+
+            }
+
+            
+
+            if 'open' in str(trade_side).lower():
+
+                entries.append(trade_data)
+
+            elif 'close' in str(trade_side).lower():
+
+                exits.append(trade_data)
+
+        
+
+        for exit_trade in exits:
+
+            if exit_trade['time'] in self.synced_trades:
+
+                continue
+
+            
+
+            exit_time = exit_trade['time']
+
+            exit_price = exit_trade['price']
+
+            amount = exit_trade['amount']
+
+            fee = exit_trade['fee']
+
+            
+
+            entry_price = exit_price
+
+            entry_time = exit_time
+
+            holding_seconds = 0
+
+            
+
+            for entry in reversed(entries):
+
+                if entry['time'] < exit_time:
+
+                    entry_price = entry['price']
+
+                    entry_time = entry['time']
+
+                    try:
+
+                        entry_dt = datetime.fromisoformat(entry_time.replace('Z', '+00:00').split('+')[0])
+
+                        exit_dt = datetime.fromisoformat(exit_time.replace('Z', '+00:00').split('+')[0])
+
+                        holding_seconds = int((exit_dt - entry_dt).total_seconds())
+
+                    except:
+
+                        pass
+
+                    self.synced_trades.add(entry['id'])
+
+                    break
+
+            
+
+            if exit_trade['side'] == 'sell':
+
+                pnl = (exit_price - entry_price) * amount
+
+            else:
+
+                pnl = (entry_price - exit_price) * amount
+
+            
+
+            pnl_percent = (pnl / (entry_price * amount)) * 100 if entry_price > 0 and amount > 0 else 0
+
+            is_win = 1 if pnl > 0 else 0
+
+            
+
+            try:
+
+                db.save_trade({
+
+                    'strategy': '비트겟직접',
+
+                    'exchange': 'BITGET',
+
+                    'symbol': symbol,
+
+                    'side': 'close_buy' if exit_trade['side'] == 'sell' else 'close_sell',
+
+                    'amount': amount,
+
+                    'price': exit_price,
+
+                    'entry_price': entry_price,
+
+                    'exit_price': exit_price,
+
+                    'entry_time': entry_time,
+
+                    'exit_time': exit_time,
+
+                    'leverage': 1,
+
+                    'pnl': round(pnl, 4),
+
+                    'pnl_percent': round(pnl_percent, 2),
+
+                    'is_win': is_win,
+
+                    'fee': fee,
+
+                    'holding_seconds': holding_seconds
+
+                })
+
+                self.synced_trades.add(exit_trade['time'])
+
+                log_message(f"✅ [거래동기화] {symbol} | 손익: {pnl:.4f} USDT | 보유: {holding_seconds}초")
+
+            except Exception as e:
+
+                log_error_message(f"거래 저장 실패: {str(e)[:50]}", "Sync")
+
+    
+
+    def _send_alert(self, issue):
+
+        log_message(f"⚠️ [리커버리] {issue['message']}")
 
     
 
     def get_status(self):
-
-        """현재 상태 반환"""
 
         return {
 
@@ -401,8 +707,6 @@ class RecoveryEngine:
 
             'auto_recover': self.auto_recover,
 
-            'issues_found': len(self.issues_found),
-
             'issues': self.issues_found
 
         }
@@ -411,7 +715,5 @@ class RecoveryEngine:
 
 
 
-# 전역 인스턴스
-
-recovery_engine = RecoveryEngine(check_interval=60, auto_recover=False)
+recovery_engine = RecoveryEngine(check_interval=60, auto_recover=True)
 
