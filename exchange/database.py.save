@@ -65,63 +65,41 @@ class Database:
 
     def save_trade(self, trade_data: dict):
         query = """
-        INSERT INTO trades (
-            strategy, exchange, symbol, side, amount, price, entry_price, exit_price, entry_time, exit_time, 
+ def save_trade(self, trade_data: dict): INSERT INTO trades (
+        query = """
+            strategy, exchange, symbol, side, amount, price, leverage, pnl, pnl_percent, is_win, created_at INSERT INTO trades ( ) VALUES (
+            strategy, exchange, symbol, side, amount, price,
+            :strategy, :exchange, :symbol, :side, :amount, :price, leverage, :pnl, :pnl_percent, :is_win, :created_at
+            entry_price, exit_price, entry_time, exit_time, ) """ trade_data['created_at'] = datetime.now().isoformat() return self.excute(query, trade_data)
             leverage, pnl, pnl_percent, is_win, fee, holding_seconds, created_at
-        ) VALUES (
-            :strategy, :exchange, :symbol, :side, :amount, :price, :entry_price, :exit_price, :entry_time, :exit_time,
+
+    def save_entry(self, strategy: str, exchange: str, symbol: str, side: str, amount: float, price: float, leverage: int = 1): ) VALUES ( query = """ INSERT OR REPLACE INTO positions (
+            :strategy, :exchange, :symbol, :side, :amount, :price,
+            strategy, exchange, symbol, side, amount, entry_price, leverage, created_at ) VALUES (
+            :entry_price, :exit_price, :entry_time, :exit_time, strategy, :exchange, :symbol, :side, :amount, :entry_price, :leverage, :created_at
             :leverage, :pnl, :pnl_percent, :is_win, :fee, :holding_seconds, :created_at
+        ) """ return self.excute(query, {
         )
+            'strategy': strategy, 'exchange': exchange, 'symbol': symbol, 'side': side, 'amount': amount, 'entry_price': price, 'leverage': leverage, 'created_at': datetime.now().isoformat()
         """
+        })
         trade_data['created_at'] = datetime.now().isoformat()
+
+    def get_position(self, strategy: str, exchange: str, symbol: str): query = """ SELECT * FROM positions WHERE strategy = :strategy AND exchange = :exchange AND symbol = :symbol ORDER BY created_at DESC LIMIT 1 """ return 
+        self.fetch_one(query, {
         trade_data.setdefault('entry_price', None)
-        trade_data.setdefault('exit_price', None)
-        trade_data.setdefault('entry_time', None)
-        trade_data.setdefault('exit_time', None)
-        trade_data.setdefault('fee', None)
-        trade_data.setdefault('holding_seconds', None)
-        return self.excute(query, trade_data)
-
-    def save_entry(self, strategy: str, exchange: str, symbol: str, side: str, 
-                   amount: float, price: float, leverage: int = 1):
-        query = """
-        INSERT OR REPLACE INTO positions (
-            strategy, exchange, symbol, side, amount, entry_price, leverage, created_at
-        ) VALUES (
-            :strategy, :exchange, :symbol, :side, :amount, :entry_price, :leverage, :created_at
-        )
-        """
-        return self.excute(query, {
-            'strategy': strategy,
-            'exchange': exchange,
-            'symbol': symbol,
-            'side': side,
-            'amount': amount,
-            'entry_price': price,
-            'leverage': leverage,
-            'created_at': datetime.now().isoformat()
-        })
-
-    def get_position(self, strategy: str, exchange: str, symbol: str):
-        query = """
-        SELECT * FROM positions 
-        WHERE strategy = :strategy AND exchange = :exchange AND symbol = :symbol
-        ORDER BY created_at DESC LIMIT 1
-        """
-        return self.fetch_one(query, {
             'strategy': strategy, 'exchange': exchange, 'symbol': symbol
+        trade_data.setdefault('exit_price', None)
         })
+        trade_data.setdefault('entry_time', None)
 
-    def close_position(self, strategy: str, exchange: str, symbol: str, 
-                       exit_price: float, exit_amount: float):
-        position = self.get_position(strategy, exchange, symbol)
-        if not position:
+    def close_position(self, strategy: str, exchange: str, symbol: str, exit_price: float, exit_amount: float): trade_data.setdefault('exit_time', None) position = self.get_position(strategy, exchange, symbol) if not position:
+        trade_data.setdefault('fee', None)
             return None
+        trade_data.setdefault('holding_seconds', None)
         
-        entry_price = position['entry_price']
-        side = position['side']
-        leverage = position['leverage'] or 1
-        
+        entry_price = position['entry_price'] side = position['side'] leverage = position['leverage'] or 1
+        return self.excute(query, trade_data)        
         if side == 'buy':
             pnl_percent = ((exit_price - entry_price) / entry_price) * 100 * leverage
         else:
